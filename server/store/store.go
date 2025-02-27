@@ -13,7 +13,7 @@ type IStore interface {
 	Set(key string, value resp.Value)
 	Get(key string) (resp.Value, bool)
 	Del(key string) bool
-	Scan(cursor string, matchPattern string, count int) resp.Value
+	Scan(cursor int, matchPattern string, count int) resp.Value
 	SaveToDisk() error
 	LoadFromDisk() error
 }
@@ -100,7 +100,7 @@ func (s *store) Del(key string) bool {
 	return false
 }
 
-func (s *store) Scan(cursor string, matchPattern string, count int) resp.Value {
+func (s *store) Scan(startIdx int, matchPattern string, count int) resp.Value {
 	var allKeys []string
 
 	var regex *regexp.Regexp
@@ -120,17 +120,6 @@ func (s *store) Scan(cursor string, matchPattern string, count int) resp.Value {
 	for i := range s.Shards {
 		shardKeys := s.Shards[i].scanKeys(regex)
 		allKeys = append(allKeys, shardKeys...)
-	}
-
-	startIdx := 0
-	if cursor != "0" {
-		var idx int
-		_, err := fmt.Sscanf(cursor, "%d", &idx)
-		if err != nil {
-			startIdx = 0
-		} else {
-			startIdx = idx
-		}
 	}
 
 	endIdx := min(startIdx + count, len(allKeys))
