@@ -6,28 +6,28 @@ import (
 )
 
 type CountingBloomFilter struct {
-	m      uint32   // Size of the filter (number of counters)
-	k      uint32   // Number of hash functions
-	filter []uint32 // The array of counters
+	M      uint32   // Size of the filter (number of counters)
+	K      uint32   // Number of hash functions
+	Filter []uint32 // The array of counters
 	mu     sync.RWMutex
 }
 
 func NewCountingBloomFilter(m uint32, k uint32) *CountingBloomFilter {
 	return &CountingBloomFilter{
-		m:      m,
-		k:      k,
-		filter: make([]uint32, m),
+		M:      m,
+		K:      k,
+		Filter: make([]uint32, m),
 	}
 }
 
 func (b *CountingBloomFilter) hash(key string) []uint32 {
-	hashValues := make([]uint32, b.k)
+	hashValues := make([]uint32, b.K)
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	baseHash := h.Sum32()
 
-	for i := uint32(0); i < b.k; i++ {
-		hashValues[i] = (baseHash + i*i) % b.m
+	for i := uint32(0); i < b.K; i++ {
+		hashValues[i] = (baseHash + i*i) % b.M
 	}
 
 	return hashValues
@@ -39,7 +39,7 @@ func (b *CountingBloomFilter) Insert(key string) {
 
 	hashes := b.hash(key)
 	for _, hashVal := range hashes {
-		b.filter[hashVal]++
+		b.Filter[hashVal]++
 	}
 }
 
@@ -49,8 +49,8 @@ func (b *CountingBloomFilter) Remove(key string) {
 
 	hashes := b.hash(key)
 	for _, hashVal := range hashes {
-		if b.filter[hashVal] > 0 {
-			b.filter[hashVal]--
+		if b.Filter[hashVal] > 0 {
+			b.Filter[hashVal]--
 		}
 	}
 }
@@ -61,7 +61,7 @@ func (b *CountingBloomFilter) MightContain(key string) bool {
 
 	hashes := b.hash(key)
 	for _, hashVal := range hashes {
-		if b.filter[hashVal] == 0 {
+		if b.Filter[hashVal] == 0 {
 			return false
 		}
 	}

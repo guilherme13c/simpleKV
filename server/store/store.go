@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"simpleKV/resp"
 	"strings"
+	"sync"
+	"time"
 )
 
 type IStore interface {
@@ -12,24 +14,46 @@ type IStore interface {
 	Get(key string) (resp.Value, bool)
 	Del(key string) bool
 	Scan(cursor string, matchPattern string, count int) resp.Value
+	SaveToDisk() error
+	LoadFromDisk() error
 }
 
 type store struct {
-	shards      []shard
-	bloomFilter *CountingBloomFilter
+	Shards      []shard
+	BloomFilter *CountingBloomFilter
+
+	mu              sync.Mutex
+	persistenceFile string
 }
 
 func NewStore(numShards int, bloomSize uint32) IStore {
 	shards := make([]shard, numShards)
 	for i := range shards {
 		shards[i] = shard{
-			data: make(map[string]resp.Value),
+			Data: make(map[string]resp.Value),
 		}
 	}
-	return &store{
-		shards:      shards,
-		bloomFilter: NewCountingBloomFilter(bloomSize, 3),
+	newStore := &store{
+		Shards:          shards,
+		BloomFilter:     NewCountingBloomFilter(bloomSize, 3),
+		mu:              sync.Mutex{},
+		persistenceFile: "dump.rdb",
 	}
+
+	newStore.LoadFromDisk()
+
+	go func() {
+		for {
+			time.Sleep(60 * time.Second)
+
+			err := newStore.SaveToDisk()
+			if err != nil {
+				fmt.Println("Error saving snapshot:", err)
+			}
+		}
+	}()
+
+	return newStore
 }
 
 func (s *store) Set(key string, value resp.Value) {
@@ -38,28 +62,38 @@ func (s *store) Set(key string, value resp.Value) {
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
-	shard.data[key] = value
+	shard.Data[key] = value
+
+	s.BloomFilter.Insert(key)
 }
 
 func (s *store) Get(key string) (resp.Value, bool) {
+	if !s.BloomFilter.MightContain(key) {
+		return resp.Value{}, false
+	}
+
 	shard := s.getShard(key)
 
 	shard.mu.RLock()
 	defer shard.mu.RUnlock()
 
-	val, ok := shard.data[key]
+	val, ok := shard.Data[key]
 
 	return val, ok
 }
 
 func (s *store) Del(key string) bool {
+	if !s.BloomFilter.MightContain(key) {
+		return false
+	}
+
 	shard := s.getShard(key)
 
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
-	if _, ok := shard.data[key]; ok {
-		delete(shard.data, key)
+	if _, ok := shard.Data[key]; ok {
+		delete(shard.Data, key)
 		return true
 	}
 
@@ -83,8 +117,8 @@ func (s *store) Scan(cursor string, matchPattern string, count int) resp.Value {
 		}
 	}
 
-	for i := range s.shards {
-		shardKeys := s.shards[i].scanKeys(regex)
+	for i := range s.Shards {
+		shardKeys := s.Shards[i].scanKeys(regex)
 		allKeys = append(allKeys, shardKeys...)
 	}
 
@@ -99,10 +133,7 @@ func (s *store) Scan(cursor string, matchPattern string, count int) resp.Value {
 		}
 	}
 
-	endIdx := startIdx + count
-	if endIdx > len(allKeys) {
-		endIdx = len(allKeys)
-	}
+	endIdx := min(startIdx + count, len(allKeys))
 
 	resultKeys := allKeys[startIdx:endIdx]
 
@@ -124,6 +155,20 @@ func (s *store) Scan(cursor string, matchPattern string, count int) resp.Value {
 			},
 		},
 	}
+}
+
+func (s *store) SaveToDisk() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.saveSnapshot()
+}
+
+func (s *store) LoadFromDisk() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.loadSnapshot()
 }
 
 func createBulkStringArray(keys []string) []resp.Value {

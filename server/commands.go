@@ -49,7 +49,6 @@ func (s *server) handleRequest(req resp.Value) resp.Value {
 
 	case "COMMAND":
 		if len(req.Array) == 2 && strings.ToUpper(req.Array[1].BulkString) == "DOCS" {
-			// Return an empty array as a safe response
 			return resp.Value{
 				Type:  resp.ARRAY,
 				Array: []resp.Value{},
